@@ -1,6 +1,12 @@
 # GP MACHINE
 
-Sends your own Grand Exchange offers to your GP MACHINE flipping dashboard, so your flips are logged without any typing.
+Sends your own Grand Exchange offers to your GP MACHINE flipping dashboard, so your flips are logged without any typing:
+your stock shown like your bank, your profit, your open offers, a leaderboard, and private alerts when an offer sits
+beside the market or a buy limit is free again.
+
+**Start here: https://gp.217-160-143-251.sslip.io** (free to try; the Telegram bot @GPMachine_bot gives you your login).
+GP MACHINE also posts live Grand Exchange flips (checked afterwards, hit rate public), CRASH/PUMP alerts and news-based
+calls in a Telegram hub.
 
 ## What it sends
 
