@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import net.runelite.api.Client;
+import net.runelite.api.GrandExchangeOffer;
+import net.runelite.api.GrandExchangeOfferState;
 import net.runelite.api.widgets.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.FontManager;
@@ -62,6 +64,13 @@ class GeSlotOverlay extends Overlay
 			Map<?, ?> offer = (Map<?, ?>) o;
 			int slot = (int) GpMachinePanel.toLong(offer.get("slot"));
 			if (slot < 0 || slot > 7)
+			{
+				continue;
+			}
+			// only when the game really has that offer in that slot (the plugin cannot report a slot that emptied while it was off)
+			GrandExchangeOffer[] live = client.getGrandExchangeOffers();
+			if (live == null || live.length <= slot || live[slot] == null || live[slot].getState() == GrandExchangeOfferState.EMPTY
+				|| live[slot].getItemId() != (int) GpMachinePanel.toLong(offer.get("item_id")))
 			{
 				continue;
 			}
