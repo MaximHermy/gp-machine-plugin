@@ -3,6 +3,7 @@ package com.gpmachine;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.Keybind;
 
 @ConfigGroup(GpMachinePlugin.CONFIG_GROUP)
 public interface GpMachineConfig extends Config
@@ -41,5 +42,27 @@ public interface GpMachineConfig extends Config
 	default String serverUrl()
 	{
 		return "https://gp.217-160-143-251.sslip.io/api/v1/ge";
+	}
+
+	@ConfigItem(
+		keyName = "panel",
+		name = "Side panel",
+		description = "Show the GP MACHINE side panel: the best flips for your capital and your day (needs your key)",
+		position = 4
+	)
+	default boolean panel()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "priceKey",
+		name = "Price hotkey",
+		description = "While the GE asks for a price: press this key and the GP MACHINE buy or sell price is filled in. You still confirm yourself.",
+		position = 5
+	)
+	default Keybind priceKey()
+	{
+		return new Keybind(java.awt.event.KeyEvent.VK_V, java.awt.event.InputEvent.ALT_DOWN_MASK);
 	}
 }

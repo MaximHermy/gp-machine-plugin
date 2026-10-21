@@ -8,6 +8,19 @@ beside the market or a buy limit is free again.
 GP MACHINE also posts live Grand Exchange flips (checked afterwards, hit rate public), CRASH/PUMP alerts and news-based
 calls in a Telegram hub.
 
+## Side panel (1.1.0)
+
+Click the gold GP coin on the RuneLite side bar:
+
+- **Flips**: the best Grand Exchange flips right now for your capital (set on the dashboard), with FAST / SLOW and the
+  ✅ SOLID label (flips that worked out best so far). Buttons at the top filter them. Updated every minute.
+- **Your day**: your profit today, your stock, your open offers (green = priced well, red = beside the market) and when
+  your buy limits are free again.
+- **Price hotkey** (default Alt+V): while the Grand Exchange asks you for a price, press the key and the GP MACHINE buy or
+  sell price for that item is filled in. You still confirm the offer yourself. The plugin never buys or sells.
+
+The panel needs your key (dashboard › Settings › Plugin). It only reads data from the GP MACHINE server.
+
 ## What it sends
 
 Only when you switch on **Send GE offers** and paste your personal key:
