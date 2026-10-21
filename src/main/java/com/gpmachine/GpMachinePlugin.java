@@ -40,7 +40,10 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.HotkeyListener;
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -90,6 +93,9 @@ public class GpMachinePlugin extends Plugin
 	@Inject
 	private KeyManager keyManager;
 
+	@Inject
+	private OverlayManager overlayManager;
+
 	private final Map<Integer, Map<String, Object>> pending = new ConcurrentHashMap<>();
 	private volatile String account;
 	private volatile boolean sendScheduled;
@@ -97,7 +103,9 @@ public class GpMachinePlugin extends Plugin
 	private GpMachinePanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> refresher;
+	private GeSlotOverlay slotOverlay;
 	private volatile Map<String, Object> selectedFlip;
+	private volatile Map<String, Object> lastPacket;
 
 	private final HotkeyListener priceHotkey = new HotkeyListener(() -> config.priceKey())
 	{
@@ -118,6 +126,8 @@ public class GpMachinePlugin extends Plugin
 	protected void startUp()
 	{
 		keyManager.registerKeyListener(priceHotkey);
+		slotOverlay = new GeSlotOverlay(client, () -> lastPacket);
+		overlayManager.add(slotOverlay);
 		if (config.panel())
 		{
 			showPanel();
@@ -129,6 +139,12 @@ public class GpMachinePlugin extends Plugin
 	{
 		pending.clear();
 		keyManager.unregisterKeyListener(priceHotkey);
+		if (slotOverlay != null)
+		{
+			overlayManager.remove(slotOverlay);
+			slotOverlay = null;
+		}
+		lastPacket = null;
 		hidePanel();
 	}
 
@@ -162,7 +178,7 @@ public class GpMachinePlugin extends Plugin
 		{
 			return;
 		}
-		panel = new GpMachinePanel(flip -> selectedFlip = flip);
+		panel = new GpMachinePanel(flip -> selectedFlip = flip, this::searchItem, this::toggleFavorite);
 		navButton = NavigationButton.builder()
 			.tooltip("GP MACHINE")
 			.icon(icon())
@@ -238,6 +254,7 @@ public class GpMachinePlugin extends Plugin
 					Map<String, Object> packet = gson.fromJson(r.body().string(), new TypeToken<Map<String, Object>>()
 					{
 					}.getType());
+					lastPacket = packet;
 					SwingUtilities.invokeLater(() ->
 					{
 						p.setStatus("Updated " + java.time.LocalTime.now().withNano(0) + " \u00b7 every minute", false);
@@ -257,12 +274,110 @@ public class GpMachinePlugin extends Plugin
 	 */
 	static String panelUrl(String serverUrl)
 	{
+		return apiUrl(serverUrl, "panel");
+	}
+
+	static String apiUrl(String serverUrl, String naam)
+	{
 		String u = serverUrl.trim();
 		if (u.endsWith("/ge"))
 		{
-			return u.substring(0, u.length() - 3) + "/panel";
+			return u.substring(0, u.length() - 3) + "/" + naam;
 		}
-		return u.endsWith("/") ? u + "api/v1/panel" : u + "/api/v1/panel";
+		return (u.endsWith("/") ? u : u + "/") + "api/v1/" + naam;
+	}
+
+	/**
+	 * Item search from the panel: GET .../api/v1/item?q=name (the server answers with up to 8 items).
+	 */
+	private void searchItem(String q)
+	{
+		GpMachinePanel p = panel;
+		if (p == null || config.key().trim().isEmpty())
+		{
+			return;
+		}
+		String url;
+		try
+		{
+			url = apiUrl(config.serverUrl(), "item") + "?q=" + java.net.URLEncoder.encode(q, "UTF-8");
+		}
+		catch (java.io.UnsupportedEncodingException e)
+		{
+			return;
+		}
+		Request request = new Request.Builder().url(url).header("Authorization", "Bearer " + config.key().trim()).get().build();
+		okHttpClient.newCall(request).enqueue(new Callback()
+		{
+			@Override
+			public void onFailure(Call call, IOException e)
+			{
+				SwingUtilities.invokeLater(() -> p.setStatus("No connection to the server.", true));
+			}
+
+			@Override
+			public void onResponse(Call call, Response response)
+			{
+				try (Response r = response)
+				{
+					if (!r.isSuccessful() || r.body() == null)
+					{
+						return;
+					}
+					Map<String, Object> uit = gson.fromJson(r.body().string(), new TypeToken<Map<String, Object>>()
+					{
+					}.getType());
+					Object items = uit.get("items");
+					@SuppressWarnings("unchecked")
+					List<Map<String, Object>> lijst = items instanceof List ? (List<Map<String, Object>>) items : new ArrayList<>();
+					SwingUtilities.invokeLater(() ->
+					{
+						p.setStatus(lijst.size() + " found", false);
+						p.showSearch(lijst);
+					});
+				}
+				catch (Exception e)
+				{
+					SwingUtilities.invokeLater(() -> p.setStatus("Could not read the server's answer.", true));
+				}
+			}
+		});
+	}
+
+	/**
+	 * The star in the panel: POST .../api/v1/favorite {"item_id": N}. Afterwards the panel is refreshed.
+	 */
+	private void toggleFavorite(long itemId)
+	{
+		if (config.key().trim().isEmpty())
+		{
+			return;
+		}
+		Request request = new Request.Builder()
+			.url(apiUrl(config.serverUrl(), "favorite"))
+			.header("Authorization", "Bearer " + config.key().trim())
+			.post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"), "{\"item_id\": " + itemId + "}"))
+			.build();
+		okHttpClient.newCall(request).enqueue(new Callback()
+		{
+			@Override
+			public void onFailure(Call call, IOException e)
+			{
+				log.debug("GP MACHINE: favorite failed", e);
+			}
+
+			@Override
+			public void onResponse(Call call, Response response)
+			{
+				response.close();
+				GpMachinePanel p = panel;
+				if (p != null)
+				{
+					SwingUtilities.invokeLater(() -> p.setStatus("Favorite saved \u00b7 refreshing\u2026", false));
+				}
+				refreshPanel();
+			}
+		});
 	}
 
 	/**

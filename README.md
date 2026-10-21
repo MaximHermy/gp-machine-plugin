@@ -19,6 +19,12 @@ Click the gold GP coin on the RuneLite side bar:
 - **Price hotkey** (default Alt+V): while the Grand Exchange asks you for a price, press the key and the GP MACHINE buy or
   sell price for that item is filled in. You still confirm the offer yourself. The plugin never buys or sells.
 
+- **Favorites and item search**: type an item name at the top of the panel for its prices of now, the flip round,
+  the members price and a ★ star. Starred items get alerts in Telegram and show under the ★ Favorites tab.
+- **Coloured GE slots**: in the Grand Exchange window every slot with an offer gets a green edge (priced well) or a red
+  edge (beside the market: a buy below what sellers get now, or a sell above what buyers pay now) with how long it has
+  been waiting.
+
 The panel needs your key (dashboard › Settings › Plugin). It only reads data from the GP MACHINE server.
 
 ## What it sends

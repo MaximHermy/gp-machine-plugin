@@ -5,8 +5,8 @@ import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.text.NumberFormat;
@@ -21,6 +21,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingConstants;
 import net.runelite.client.ui.ColorScheme;
@@ -28,8 +29,8 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 
 /**
- * The GP MACHINE side panel: the best flips for your capital (FAST, SLOW, SOLID) and your day (profit, stock, open
- * offers, buy limits). Everything is computed by the GP MACHINE server; this panel only shows it.
+ * The GP MACHINE side panel: the best flips for your capital (FAST, SLOW, SOLID), your day (profit, stock, open offers,
+ * buy limits), your favorites, and item search. Everything is computed by the GP MACHINE server; this panel only shows it.
  */
 class GpMachinePanel extends PluginPanel
 {
@@ -47,17 +48,25 @@ class GpMachinePanel extends PluginPanel
 	private final JToggleButton solidButton = toggle("✅ SOLID");
 	private final JToggleButton flipsTab = toggle("Flips");
 	private final JToggleButton dayTab = toggle("Your day");
+	private final JToggleButton favTab = toggle("★ Favorites");
+	private final JTextField search = new JTextField();
 	private final JLabel status = new JLabel("Connecting…");
 	private final JPanel list = new JPanel();
 	private final Consumer<Map<String, Object>> onSelect;
+	private final Consumer<String> onSearch;
+	private final Consumer<Long> onFavorite;
 
 	private Map<String, Object> data;
 	private Map<String, Object> selected;
+	private List<Map<String, Object>> searchResults;
+	private String searchText = "";
 
-	GpMachinePanel(Consumer<Map<String, Object>> onSelect)
+	GpMachinePanel(Consumer<Map<String, Object>> onSelect, Consumer<String> onSearch, Consumer<Long> onFavorite)
 	{
 		super(false);
 		this.onSelect = onSelect;
+		this.onSearch = onSearch;
+		this.onFavorite = onFavorite;
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 		setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -75,13 +84,31 @@ class GpMachinePanel extends PluginPanel
 		top.add(status);
 		top.add(Box.createVerticalStrut(6));
 
-		JPanel tabs = new JPanel(new GridLayout(1, 2, 4, 0));
+		search.setFont(FontManager.getRunescapeSmallFont());
+		search.setToolTipText("Type an item name and press Enter");
+		search.addActionListener(e -> doSearch());
+		JPanel searchRow = new JPanel(new BorderLayout(4, 0));
+		searchRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		searchRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		searchRow.add(search, BorderLayout.CENTER);
+		JButton go = new JButton("Search");
+		go.setFont(FontManager.getRunescapeSmallFont());
+		go.setFocusPainted(false);
+		go.setMargin(new Insets(0, 6, 0, 6));
+		go.addActionListener(e -> doSearch());
+		searchRow.add(go, BorderLayout.EAST);
+		top.add(searchRow);
+		top.add(Box.createVerticalStrut(6));
+
+		JPanel tabs = new JPanel(new GridLayout(1, 3, 4, 0));
 		tabs.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		flipsTab.setSelected(true);
-		flipsTab.addActionListener(e -> selectTab(true));
-		dayTab.addActionListener(e -> selectTab(false));
+		flipsTab.addActionListener(e -> selectTab(flipsTab));
+		dayTab.addActionListener(e -> selectTab(dayTab));
+		favTab.addActionListener(e -> selectTab(favTab));
 		tabs.add(flipsTab);
 		tabs.add(dayTab);
+		tabs.add(favTab);
 		top.add(tabs);
 		top.add(Box.createVerticalStrut(6));
 
@@ -113,11 +140,25 @@ class GpMachinePanel extends PluginPanel
 		return b;
 	}
 
-	private void selectTab(boolean flips)
+	private void selectTab(JToggleButton tab)
 	{
-		flipsTab.setSelected(flips);
-		dayTab.setSelected(!flips);
+		flipsTab.setSelected(tab == flipsTab);
+		dayTab.setSelected(tab == dayTab);
+		favTab.setSelected(tab == favTab);
+		searchResults = null;
 		render();
+	}
+
+	private void doSearch()
+	{
+		String q = search.getText().trim();
+		if (q.length() < 2)
+		{
+			return;
+		}
+		searchText = q;
+		setStatus("Searching “" + q + "”…", false);
+		onSearch.accept(q);
 	}
 
 	void setStatus(String text, boolean error)
@@ -129,12 +170,40 @@ class GpMachinePanel extends PluginPanel
 	void update(Map<String, Object> packet)
 	{
 		data = packet;
+		if (searchResults != null)
+		{
+			// keep the search on screen, but take the fresh stars from the packet
+			List<Map<String, Object>> favs = favorites();
+			for (Map<String, Object> it : searchResults)
+			{
+				boolean fav = false;
+				for (Map<String, Object> f : favs)
+				{
+					if (toLong(f.get("item_id")) == toLong(it.get("item_id")))
+					{
+						fav = true;
+					}
+				}
+				it.put("favorite", fav);
+			}
+		}
+		render();
+	}
+
+	void showSearch(List<Map<String, Object>> items)
+	{
+		searchResults = items;
 		render();
 	}
 
 	Map<String, Object> getSelected()
 	{
 		return selected;
+	}
+
+	Map<String, Object> getData()
+	{
+		return data;
 	}
 
 	@SuppressWarnings("unchecked")
@@ -147,16 +216,34 @@ class GpMachinePanel extends PluginPanel
 		return (List<Map<String, Object>>) data.get("flips");
 	}
 
+	@SuppressWarnings("unchecked")
+	private List<Map<String, Object>> favorites()
+	{
+		if (data == null || !(data.get("favorites") instanceof List))
+		{
+			return new ArrayList<>();
+		}
+		return (List<Map<String, Object>>) data.get("favorites");
+	}
+
 	private void render()
 	{
 		list.removeAll();
-		if (data == null)
+		if (searchResults != null)
+		{
+			renderItems(searchResults, "Results for “" + searchText + "”", "No item found. Try a shorter name.");
+		}
+		else if (data == null)
 		{
 			list.add(note("Waiting for the server…"));
 		}
 		else if (flipsTab.isSelected())
 		{
 			renderFlips();
+		}
+		else if (favTab.isSelected())
+		{
+			renderItems(favorites(), favorites().size() + " favorites", "No favorites yet. Search an item and press ☆.");
 		}
 		else
 		{
@@ -191,34 +278,32 @@ class GpMachinePanel extends PluginPanel
 		}
 	}
 
-	private JPanel flipCard(Map<String, Object> f, boolean fast, boolean solid)
+	private void renderItems(List<Map<String, Object>> items, String head, String empty)
+	{
+		list.add(note(head));
+		if (items.isEmpty())
+		{
+			list.add(note(empty));
+			return;
+		}
+		for (Map<String, Object> it : items)
+		{
+			list.add(itemCard(it));
+			list.add(Box.createVerticalStrut(4));
+		}
+	}
+
+	private JPanel card(Map<String, Object> f, boolean solid)
 	{
 		JPanel card = new JPanel();
 		card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-		boolean isSelected = selected != null && selected.get("item_id").equals(f.get("item_id"));
+		boolean isSelected = selected != null && toLong(selected.get("item_id")) == toLong(f.get("item_id"));
 		card.setBackground(isSelected ? CARD_SELECTED : CARD);
 		card.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createLineBorder(isSelected ? GOLD : (solid ? GREEN.darker() : CARD.brighter())),
 			BorderFactory.createEmptyBorder(5, 7, 5, 7)));
 		card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 90));
-
-		JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-		head.setOpaque(false);
-		JLabel name = new JLabel(String.valueOf(f.get("name")));
-		name.setFont(FontManager.getRunescapeBoldFont());
-		name.setForeground(Color.WHITE);
-		head.add(name);
-		head.add(tag(fast ? "FAST" : "SLOW", fast ? GREEN : ORANGE));
-		if (solid)
-		{
-			head.add(tag("✅ SOLID", GREEN));
-		}
-		card.add(head);
-		card.add(line("+" + N.format(toLong(f.get("per_item"))) + " gp per item", GOLD, true));
-		card.add(line("Buy " + N.format(toLong(f.get("buy"))) + " · Sell " + N.format(toLong(f.get("sell"))), Color.WHITE, false));
-		card.add(line("Up to " + N.format(toLong(f.get("qty"))) + " per 4h = +" + N.format(toLong(f.get("total"))) + " gp · "
-			+ toLong(f.get("age_min")) + " min old", SOFT, false));
+		card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
 		card.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -229,6 +314,85 @@ class GpMachinePanel extends PluginPanel
 				render();
 			}
 		});
+		return card;
+	}
+
+	private JPanel head(Map<String, Object> f, Boolean fast, boolean solid)
+	{
+		JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		head.setOpaque(false);
+		JLabel name = new JLabel(String.valueOf(f.get("name")));
+		name.setFont(FontManager.getRunescapeBoldFont());
+		name.setForeground(Color.WHITE);
+		head.add(name);
+		if (fast != null)
+		{
+			head.add(tag(fast ? "FAST" : "SLOW", fast ? GREEN : ORANGE));
+		}
+		if (solid)
+		{
+			head.add(tag("✅ SOLID", GREEN));
+		}
+		return head;
+	}
+
+	private JPanel flipCard(Map<String, Object> f, boolean fast, boolean solid)
+	{
+		JPanel card = card(f, solid);
+		card.add(head(f, fast, solid));
+		card.add(line("+" + N.format(toLong(f.get("per_item"))) + " gp per item", GOLD, true));
+		card.add(line("Buy " + N.format(toLong(f.get("buy"))) + " · Sell " + N.format(toLong(f.get("sell"))), Color.WHITE, false));
+		card.add(line("Up to " + N.format(toLong(f.get("qty"))) + " per 4h = +" + N.format(toLong(f.get("total"))) + " gp · "
+			+ toLong(f.get("age_min")) + " min old", SOFT, false));
+		return card;
+	}
+
+	/**
+	 * An item from search or favorites: the prices of now, the flip round if there is one, the members price, and a star.
+	 */
+	private JPanel itemCard(Map<String, Object> it)
+	{
+		boolean solid = Boolean.TRUE.equals(it.get("solid"));
+		Object fastObj = it.get("fast");
+		JPanel card = card(it, solid);
+		JPanel head = head(it, fastObj instanceof Boolean ? (Boolean) fastObj : null, solid);
+		boolean fav = Boolean.TRUE.equals(it.get("favorite"));
+		JButton star = new JButton(fav ? "★" : "☆");
+		star.setFont(FontManager.getRunescapeBoldFont());
+		star.setForeground(GOLD);
+		star.setFocusPainted(false);
+		star.setMargin(new Insets(0, 4, 0, 4));
+		star.setToolTipText(fav ? "Remove from favorites" : "Add to favorites (you get alerts about it)");
+		star.addActionListener(e -> onFavorite.accept(toLong(it.get("item_id"))));
+		head.add(star);
+		card.add(head);
+		if (it.get("high") != null && it.get("low") != null)
+		{
+			card.add(line("Now: high " + N.format(toLong(it.get("high"))) + " · low " + N.format(toLong(it.get("low")))
+				+ (it.get("age_min") == null ? "" : " · " + toLong(it.get("age_min")) + " min old"), Color.WHITE, false));
+		}
+		else
+		{
+			card.add(line("No price known right now.", SOFT, false));
+		}
+		if (it.get("per_item") != null)
+		{
+			long per = toLong(it.get("per_item"));
+			card.add(line((per >= 0 ? "+" : "") + N.format(per) + " gp per item · buy " + N.format(toLong(it.get("buy")))
+				+ " · sell " + N.format(toLong(it.get("sell"))), per > 0 ? GOLD : SOFT, per > 0));
+		}
+		else if (Boolean.TRUE.equals(it.get("members_item")))
+		{
+			card.add(line("Members item: the flip round is for members.", SOFT, false));
+		}
+		Object mp = it.get("members_price");
+		if (mp instanceof Map)
+		{
+			Map<?, ?> m = (Map<?, ?>) mp;
+			card.add(line("Members price: " + (m.get("low") == null ? "" : "buy " + N.format(toLong(m.get("low"))) + " ")
+				+ (m.get("high") == null ? "" : "sell " + N.format(toLong(m.get("high")))) + " · " + toLong(m.get("minutes"))
+				+ " min ago · " + toLong(m.get("members")) + " members", GREEN, false));
+		}
 		return card;
 	}
 
@@ -266,7 +430,7 @@ class GpMachinePanel extends PluginPanel
 						+ N.format(toLong(g.get("total"))) + " at " + N.format(toLong(g.get("price"))) + " gp · "
 						+ toLong(g.get("minutes")) + " min";
 					String why = ok ? "priced well" : (buy ? "too low: others pay " : "too high: others get ")
-						+ (ok ? "" : N.format(toLong(g.get("market"))) + " gp");
+						+ N.format(toLong(g.get("market"))) + " gp";
 					list.add(line(text, ok ? GREEN : RED, false));
 					list.add(line("   " + why, SOFT, false));
 				}
