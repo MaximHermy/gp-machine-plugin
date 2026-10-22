@@ -51,6 +51,9 @@ booth) outlines it in green; the rest you tick with Previous and Next. A small b
 step, the distance to the arrow and what you made. **Report** sends a problem with a method to the owner.
 Filter chips: Skilling, Combat, Processing, Collecting, F2P.
 
+A session also stops by itself when you log out or after 30 minutes without moving or looting. Each method shows what
+you made per hour last time.
+
 **Stop and save** sends the session (start, stop, gp, items gained and used) to your account. From 2 members, the
 dashboard shows the real gp per hour next to the wiki figure. The method list comes from the OSRS Wiki money making
 guides (CC BY-NC-SA), refreshed once a day on the server.

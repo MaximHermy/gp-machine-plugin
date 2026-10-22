@@ -20,6 +20,8 @@ class GrindState
 	volatile long used;
 	volatile int distance = -1;
 	volatile WorldPoint target;
+	volatile WorldPoint lastPos;
+	volatile long lastActivityMs;
 	volatile List<Map<String, Object>> checklist = new ArrayList<>();
 
 	GrindState(Map<String, Object> method, List<Map<String, Object>> steps, long startMs)
@@ -27,6 +29,7 @@ class GrindState
 		this.method = method;
 		this.steps = steps;
 		this.startMs = startMs;
+		this.lastActivityMs = startMs;
 	}
 
 	String name()

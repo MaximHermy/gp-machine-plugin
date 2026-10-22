@@ -448,6 +448,10 @@ class GpMachinePanel extends PluginPanel
 		{
 			card.add(line(mp, GREEN, false));
 		}
+		if (isSelected)
+		{
+			card.add(line("Press Alt+V in the GE price box to fill this price (change the key in the settings).", SOFT, false));
+		}
 		return card;
 	}
 
@@ -564,6 +568,10 @@ class GpMachinePanel extends PluginPanel
 			card.add(head);
 			card.add(line(N.format(toLong(m.get("gp_hour"))) + " gp/h"
 				+ (m.get("members_gp_hour") == null ? "" : " · members made " + N.format(toLong(m.get("members_gp_hour")))), GOLD, true));
+			if (m.get("last_gp_hour") != null)
+			{
+				card.add(line("You made " + N.format(toLong(m.get("last_gp_hour"))) + " gp/h last time", GREEN, false));
+			}
 			String where = m.get("location") == null ? "" : String.valueOf(m.get("location"));
 			Object intensity = m.get("intensity");
 			String intens = intensity == null ? "" : (toLong(intensity) == 1 ? "relaxed" : toLong(intensity) == 2 ? "moderate" : "intense");

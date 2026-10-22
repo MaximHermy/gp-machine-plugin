@@ -127,6 +127,7 @@ public class GpMachinePlugin extends Plugin
 	private Notifier notifier;
 
 	private static final long OFFER_NOTIFY_MIN = 30;
+	private static final long GRIND_IDLE_MS = 30 * 60 * 1000; // a session stops by itself after 30 minutes without moving or looting
 	private final Set<String> notified = new HashSet<>();
 
 	private static final long LEVELS_EVERY_S = 15 * 60;
@@ -565,6 +566,10 @@ public class GpMachinePlugin extends Plugin
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
+		if (event.getGameState() == GameState.LOGIN_SCREEN && grind != null)
+		{
+			stopGrind(); // logged out: the session ends and is saved
+		}
 		if (event.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
@@ -854,6 +859,18 @@ public class GpMachinePlugin extends Plugin
 		// the arrow: distance to the target of the current step, and steps with a place tick off by themselves
 		Player me = client.getLocalPlayer();
 		WorldPoint target = s.target;
+		long now = System.currentTimeMillis();
+		if (me != null && !me.getWorldLocation().equals(s.lastPos))
+		{
+			s.lastPos = me.getWorldLocation();
+			s.lastActivityMs = now;
+		}
+		if (now - s.lastActivityMs > GRIND_IDLE_MS)
+		{
+			stopGrind();
+			SwingUtilities.invokeLater(() -> p.setStatus("Session stopped and saved: 30 minutes without activity.", false));
+			return;
+		}
 		if (me != null && target != null)
 		{
 			WorldPoint here = me.getWorldLocation();
@@ -1087,6 +1104,7 @@ public class GpMachinePlugin extends Plugin
 		}
 		Map<Integer, Integer> now = inventoryCounts();
 		Map<Integer, Integer> before = lastInventory == null ? new HashMap<>() : lastInventory;
+		s.lastActivityMs = System.currentTimeMillis();
 		synchronized (grindGainedItems)
 		{
 			for (Map.Entry<Integer, Long> e : outputPrices.entrySet())
