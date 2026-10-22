@@ -32,11 +32,13 @@ class GeSlotOverlay extends Overlay
 
 	private final Client client;
 	private final Supplier<Map<String, Object>> packet;
+	private final java.util.function.BooleanSupplier enabled;
 
-	GeSlotOverlay(Client client, Supplier<Map<String, Object>> packet)
+	GeSlotOverlay(Client client, Supplier<Map<String, Object>> packet, java.util.function.BooleanSupplier enabled)
 	{
 		this.client = client;
 		this.packet = packet;
+		this.enabled = enabled;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 	}
@@ -45,7 +47,7 @@ class GeSlotOverlay extends Overlay
 	public Dimension render(Graphics2D g)
 	{
 		Map<String, Object> data = packet.get();
-		if (data == null || !(data.get("day") instanceof Map))
+		if (!enabled.getAsBoolean() || data == null || !(data.get("day") instanceof Map))
 		{
 			return null;
 		}

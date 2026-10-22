@@ -176,10 +176,10 @@ public class GpMachinePlugin extends Plugin
 	protected void startUp()
 	{
 		keyManager.registerKeyListener(priceHotkey);
-		slotOverlay = new GeSlotOverlay(client, () -> lastPacket);
+		slotOverlay = new GeSlotOverlay(client, () -> lastPacket, config::showGeSlots);
 		overlayManager.add(slotOverlay);
-		grindOverlay = new GrindOverlay(() -> grind);
-		grindSceneOverlay = new GrindSceneOverlay(client, () -> grind, () -> stepObjects);
+		grindOverlay = new GrindOverlay(() -> grind, config::showGrindBox);
+		grindSceneOverlay = new GrindSceneOverlay(client, () -> grind, () -> stepObjects, config::showHighlights);
 		overlayManager.add(grindOverlay);
 		overlayManager.add(grindSceneOverlay);
 		if (config.panel())
@@ -239,6 +239,14 @@ public class GpMachinePlugin extends Plugin
 		else if ("key".equals(event.getKey()) || "serverUrl".equals(event.getKey()))
 		{
 			refreshPanel();
+		}
+		else if ("showArrow".equals(event.getKey()) || "showMapPoint".equals(event.getKey()))
+		{
+			GrindState s = grind;
+			if (s != null)
+			{
+				clientThread.invoke(() -> applyStep(s));
+			}
 		}
 	}
 
@@ -710,14 +718,6 @@ public class GpMachinePlugin extends Plugin
 			clientThread.invoke(() ->
 			{
 				lastInventory = inventoryCounts();
-				long x = GpMachinePanel.toLong(answer.get("x"));
-				long y = GpMachinePanel.toLong(answer.get("y"));
-				if (x > 0 && y > 0)
-				{
-					WorldPoint wp = new WorldPoint((int) x, (int) y, 0);
-					mapPoint = WorldMapPoint.builder().worldPoint(wp).image(icon()).tooltip("GP MACHINE: " + answer.get("name")).build();
-					worldMapPointManager.add(mapPoint);
-				}
 				applyStep(s);
 			});
 			if (grindTicker != null)
@@ -910,13 +910,21 @@ public class GpMachinePlugin extends Plugin
 		if (x > 0 && y > 0)
 		{
 			s.target = new WorldPoint((int) x, (int) y, plane);
-			client.setHintArrow(s.target);
+			if (config.showArrow())
+			{
+				client.setHintArrow(s.target);
+			}
+			else
+			{
+				client.clearHintArrow();
+			}
 		}
 		else
 		{
 			s.target = null;
 			client.clearHintArrow();
 		}
+		syncMapPoint(s);
 		synchronized (stepObjects)
 		{
 			stepObjects.clear();
@@ -946,6 +954,27 @@ public class GpMachinePlugin extends Plugin
 					}
 				}
 			}
+		}
+	}
+
+	/**
+	 * The world map point at the place of the method, following the switch in the settings. Client thread.
+	 */
+	private void syncMapPoint(GrindState s)
+	{
+		long x = GpMachinePanel.toLong(s.method.get("x"));
+		long y = GpMachinePanel.toLong(s.method.get("y"));
+		boolean want = config.showMapPoint() && x > 0 && y > 0;
+		if (want && mapPoint == null)
+		{
+			mapPoint = WorldMapPoint.builder().worldPoint(new WorldPoint((int) x, (int) y, 0)).image(icon())
+				.tooltip("GP MACHINE: " + s.name()).build();
+			worldMapPointManager.add(mapPoint);
+		}
+		else if (!want && mapPoint != null)
+		{
+			worldMapPointManager.remove(mapPoint);
+			mapPoint = null;
 		}
 	}
 
@@ -1027,11 +1056,20 @@ public class GpMachinePlugin extends Plugin
 			{
 				if (it.getId() > 0)
 				{
-					counts.merge(it.getId(), it.getQuantity(), Integer::sum);
+					counts.merge(unnoted(it.getId()), it.getQuantity(), Integer::sum);
 				}
 			}
 		}
 		return counts;
+	}
+
+	/**
+	 * A noted item (a bank note of a drop) counts as the item itself, so the counter and the checklist see it.
+	 */
+	private int unnoted(int id)
+	{
+		net.runelite.api.ItemComposition def = client.getItemDefinition(id);
+		return def != null && def.getNote() != -1 && def.getLinkedNoteId() > 0 ? def.getLinkedNoteId() : id;
 	}
 
 	/**

@@ -28,7 +28,8 @@ Click the gold GP coin on the RuneLite side bar:
 
 ## In-game notifications (1.2.0)
 
-Two RuneLite notifications, both can be switched off in the plugin settings:
+Everything visual can be switched off in the plugin settings (wrench › GP MACHINE): coloured GE slots, the grind box, the
+highlights, the arrow and the world map point. Two RuneLite notifications, also switchable:
 - an offer that has waited 30 minutes beside the market (buy below what sellers get now, sell above what buyers pay);
 - a buy limit that is free again for an item you bought.
 

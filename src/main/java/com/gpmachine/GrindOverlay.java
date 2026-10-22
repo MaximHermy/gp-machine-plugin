@@ -23,10 +23,12 @@ class GrindOverlay extends OverlayPanel
 	private static final NumberFormat N = NumberFormat.getIntegerInstance(Locale.UK);
 
 	private final Supplier<GrindState> state;
+	private final java.util.function.BooleanSupplier enabled;
 
-	GrindOverlay(Supplier<GrindState> state)
+	GrindOverlay(Supplier<GrindState> state, java.util.function.BooleanSupplier enabled)
 	{
 		this.state = state;
+		this.enabled = enabled;
 		setPosition(OverlayPosition.TOP_LEFT);
 		setPriority(0.5f);
 	}
@@ -35,7 +37,7 @@ class GrindOverlay extends OverlayPanel
 	public Dimension render(Graphics2D g)
 	{
 		GrindState s = state.get();
-		if (s == null)
+		if (s == null || !enabled.getAsBoolean())
 		{
 			return null;
 		}

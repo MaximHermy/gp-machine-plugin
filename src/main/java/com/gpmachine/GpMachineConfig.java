@@ -87,4 +87,34 @@ public interface GpMachineConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(keyName = "showGeSlots", name = "Colour GE slots", description = "Green edge = your offer is priced well, red edge = it sits beside the market", position = 8)
+	default boolean showGeSlots()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "showGrindBox", name = "Grind: box in the game", description = "The small box with the method, the step, the distance and what you made during a Grind Machine session", position = 9)
+	default boolean showGrindBox()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "showHighlights", name = "Grind: highlight tiles and objects", description = "The gold destination tile and the green outline around the objects of the current step", position = 10)
+	default boolean showHighlights()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "showArrow", name = "Grind: arrow", description = "The hint arrow to the place of the current step", position = 11)
+	default boolean showArrow()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "showMapPoint", name = "Grind: world map point", description = "A GP MACHINE marker on the world map at the place of the method", position = 12)
+	default boolean showMapPoint()
+	{
+		return true;
+	}
 }

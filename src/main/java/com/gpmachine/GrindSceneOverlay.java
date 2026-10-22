@@ -30,12 +30,14 @@ class GrindSceneOverlay extends Overlay
 	private final Client client;
 	private final Supplier<GrindState> state;
 	private final Supplier<Set<TileObject>> objects;
+	private final java.util.function.BooleanSupplier enabled;
 
-	GrindSceneOverlay(Client client, Supplier<GrindState> state, Supplier<Set<TileObject>> objects)
+	GrindSceneOverlay(Client client, Supplier<GrindState> state, Supplier<Set<TileObject>> objects, java.util.function.BooleanSupplier enabled)
 	{
 		this.client = client;
 		this.state = state;
 		this.objects = objects;
+		this.enabled = enabled;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
@@ -44,7 +46,7 @@ class GrindSceneOverlay extends Overlay
 	public Dimension render(Graphics2D g)
 	{
 		GrindState s = state.get();
-		if (s == null)
+		if (s == null || !enabled.getAsBoolean())
 		{
 			return null;
 		}
