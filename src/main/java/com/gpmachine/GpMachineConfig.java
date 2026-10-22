@@ -65,4 +65,26 @@ public interface GpMachineConfig extends Config
 	{
 		return new Keybind(java.awt.event.KeyEvent.VK_V, java.awt.event.InputEvent.ALT_DOWN_MASK);
 	}
+
+	@ConfigItem(
+		keyName = "notifyOffers",
+		name = "Notify: offer beside the market",
+		description = "A RuneLite notification when one of your GE offers has waited 30 minutes beside the market (buy below what sellers get, sell above what buyers pay)",
+		position = 6
+	)
+	default boolean notifyOffers()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "notifyLimits",
+		name = "Notify: buy limit free",
+		description = "A RuneLite notification when the buy limit of an item you bought is free again",
+		position = 7
+	)
+	default boolean notifyLimits()
+	{
+		return true;
+	}
 }

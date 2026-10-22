@@ -25,14 +25,46 @@ Click the gold GP coin on the RuneLite side bar:
   edge (beside the market: a buy below what sellers get now, or a sell above what buyers pay now) with how long it has
   been waiting.
 
-The panel needs your key (dashboard › Settings › Plugin). It only reads data from the GP MACHINE server.
+
+## In-game notifications (1.2.0)
+
+Two RuneLite notifications, both can be switched off in the plugin settings:
+- an offer that has waited 30 minutes beside the market (buy below what sellers get now, sell above what buyers pay);
+- a buy limit that is free again for an item you bought.
+
+## Grind Machine (1.2.0, steps in 1.3.0)
+
+The **Grind** tab shows money making methods you can do right now, best gp per hour first. The plugin reads your skill
+levels, combat level, quest points and finished quests once after login and every 15 minutes, and sends them to your
+GP MACHINE account so the list is personal (dashboard › Grind Machine shows the same list with filters).
+
+Pick a method and press **Start**:
+- a checklist of what to bring, green or red against your inventory and equipment;
+- an arrow and a world map marker to the place (when the wiki knows its coordinates);
+- a counter: what the method yields and appears in your inventory counts as gained at GP MACHINE prices, what it uses
+  and disappears counts as used.
+
+**Steps (1.3.0)**: every method comes with steps from the server (bring, go there, do it, bank). A step with a place
+puts the arrow and a gold tile on it and ticks off by itself when you arrive; a step that names an object (a bank
+booth) outlines it in green; the rest you tick with Previous and Next. A small box in the game shows the method, the
+step, the distance to the arrow and what you made. **Report** sends a problem with a method to the owner.
+Filter chips: Skilling, Combat, Processing, Collecting, F2P.
+
+**Stop and save** sends the session (start, stop, gp, items gained and used) to your account. From 2 members, the
+dashboard shows the real gp per hour next to the wiki figure. The method list comes from the OSRS Wiki money making
+guides (CC BY-NC-SA), refreshed once a day on the server.
+
+The panel needs your key (dashboard › Settings › Plugin). It only reads data from the GP MACHINE server and from your
+own game client; it never does anything in the game.
 
 ## What it sends
 
 Only when you switch on **Send GE offers** and paste your personal key:
 
 - per offer: item id, buy or sell, price, quantity, quantity filled, gp spent, state (buying, bought, selling, sold, cancelled), GE slot and world;
-- an anonymous account id (a hash, never your name).
+- an anonymous account id (a hash, never your name);
+- for Grind Machine (1.2.0): your skill levels, combat level, quest points and the names of finished quests, and when you
+  press Stop: the session (method, start, stop, gp, items gained and used).
 
 Nothing else is read or sent. The plugin never acts in the game.
 

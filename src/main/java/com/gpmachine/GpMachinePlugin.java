@@ -12,8 +12,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -22,15 +25,34 @@ import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.GameObject;
+import net.runelite.api.GameState;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
+import net.runelite.api.InventoryID;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.Quest;
+import net.runelite.api.QuestState;
 import net.runelite.api.ScriptID;
+import net.runelite.api.ObjectComposition;
+import net.runelite.api.Player;
+import net.runelite.api.Scene;
+import net.runelite.api.Skill;
+import net.runelite.api.Tile;
+import net.runelite.api.TileObject;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.VarPlayer;
 import net.runelite.api.Varbits;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.GameObjectDespawned;
+import net.runelite.api.events.GameObjectSpawned;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -41,6 +63,8 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 import net.runelite.client.util.HotkeyListener;
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
@@ -96,6 +120,32 @@ public class GpMachinePlugin extends Plugin
 	@Inject
 	private OverlayManager overlayManager;
 
+	@Inject
+	private WorldMapPointManager worldMapPointManager;
+
+	@Inject
+	private Notifier notifier;
+
+	private static final long OFFER_NOTIFY_MIN = 30;
+	private final Set<String> notified = new HashSet<>();
+
+	private static final long LEVELS_EVERY_S = 15 * 60;
+	private static final int COINS = 995;
+
+	// Grind Machine: the running session (null = none). Only read from the game, never anything done in it.
+	private volatile GrindState grind;
+	private GrindOverlay grindOverlay;
+	private GrindSceneOverlay grindSceneOverlay;
+	private final Set<TileObject> stepObjects = new HashSet<>();
+	private final Map<Integer, Integer> grindGainedItems = new HashMap<>();
+	private final Map<Integer, Integer> grindUsedItems = new HashMap<>();
+	private final Map<Integer, Long> outputPrices = new HashMap<>();
+	private final Map<Integer, Long> inputPrices = new HashMap<>();
+	private Map<Integer, Integer> lastInventory;
+	private WorldMapPoint mapPoint;
+	private ScheduledFuture<?> grindTicker;
+	private ScheduledFuture<?> levelsTimer;
+
 	private final Map<Integer, Map<String, Object>> pending = new ConcurrentHashMap<>();
 	private volatile String account;
 	private volatile boolean sendScheduled;
@@ -128,6 +178,10 @@ public class GpMachinePlugin extends Plugin
 		keyManager.registerKeyListener(priceHotkey);
 		slotOverlay = new GeSlotOverlay(client, () -> lastPacket);
 		overlayManager.add(slotOverlay);
+		grindOverlay = new GrindOverlay(() -> grind);
+		grindSceneOverlay = new GrindSceneOverlay(client, () -> grind, () -> stepObjects);
+		overlayManager.add(grindOverlay);
+		overlayManager.add(grindSceneOverlay);
 		if (config.panel())
 		{
 			showPanel();
@@ -138,6 +192,22 @@ public class GpMachinePlugin extends Plugin
 	protected void shutDown()
 	{
 		pending.clear();
+		if (grind != null)
+		{
+			stopGrind();
+		}
+		if (grindOverlay != null)
+		{
+			overlayManager.remove(grindOverlay);
+			overlayManager.remove(grindSceneOverlay);
+			grindOverlay = null;
+			grindSceneOverlay = null;
+		}
+		if (levelsTimer != null)
+		{
+			levelsTimer.cancel(false);
+			levelsTimer = null;
+		}
 		keyManager.unregisterKeyListener(priceHotkey);
 		if (slotOverlay != null)
 		{
@@ -178,7 +248,50 @@ public class GpMachinePlugin extends Plugin
 		{
 			return;
 		}
-		panel = new GpMachinePanel(flip -> selectedFlip = flip, this::searchItem, this::toggleFavorite);
+		panel = new GpMachinePanel(new GpMachinePanel.Actions()
+		{
+			@Override
+			public void select(Map<String, Object> flip)
+			{
+				selectedFlip = flip;
+			}
+
+			@Override
+			public void search(String query)
+			{
+				searchItem(query);
+			}
+
+			@Override
+			public void favorite(long itemId)
+			{
+				toggleFavorite(itemId);
+			}
+
+			@Override
+			public void grindStart(Map<String, Object> method)
+			{
+				startGrind(method);
+			}
+
+			@Override
+			public void grindStop()
+			{
+				stopGrind();
+			}
+
+			@Override
+			public void grindStep(int delta)
+			{
+				clientThread.invoke(() -> moveStep(delta));
+			}
+
+			@Override
+			public void report(String method, String text)
+			{
+				reportProblem(method, text);
+			}
+		});
 		navButton = NavigationButton.builder()
 			.tooltip("GP MACHINE")
 			.icon(icon())
@@ -255,6 +368,7 @@ public class GpMachinePlugin extends Plugin
 					{
 					}.getType());
 					lastPacket = packet;
+					notifyFromPacket(packet);
 					SwingUtilities.invokeLater(() ->
 					{
 						p.setStatus("Updated " + java.time.LocalTime.now().withNano(0) + " \u00b7 every minute", false);
@@ -378,6 +492,585 @@ public class GpMachinePlugin extends Plugin
 				refreshPanel();
 			}
 		});
+	}
+
+	/**
+	 * In-game notifications (choice of the owner: only these two): an offer that has waited 30 minutes beside the
+	 * market, and a buy limit that is free again. Each one once; the set is cleared when it grows large.
+	 */
+	@SuppressWarnings("unchecked")
+	private void notifyFromPacket(Map<String, Object> packet)
+	{
+		if (packet == null || !(packet.get("day") instanceof Map))
+		{
+			return;
+		}
+		Map<String, Object> day = (Map<String, Object>) packet.get("day");
+		if (notified.size() > 500)
+		{
+			notified.clear();
+		}
+		if (config.notifyOffers() && day.get("offers") instanceof List)
+		{
+			for (Object o : (List<?>) day.get("offers"))
+			{
+				if (!(o instanceof Map))
+				{
+					continue;
+				}
+				Map<String, Object> g = (Map<String, Object>) o;
+				boolean buy = Boolean.TRUE.equals(g.get("buy"));
+				if (Boolean.TRUE.equals(g.get("ok")) || GpMachinePanel.toLong(g.get("minutes")) < OFFER_NOTIFY_MIN)
+				{
+					continue;
+				}
+				String key = "offer|" + g.get("slot") + "|" + g.get("name") + "|" + g.get("price") + "|" + buy;
+				if (notified.add(key))
+				{
+					notifier.notify("GP MACHINE: your " + (buy ? "buy" : "sell") + " offer for " + g.get("name") + " is "
+						+ (buy ? "below" : "above") + " the market (" + GpMachinePanel.toLong(g.get("market")) + " gp now).");
+				}
+			}
+		}
+		if (config.notifyLimits() && day.get("limits") instanceof List)
+		{
+			for (Object o : (List<?>) day.get("limits"))
+			{
+				if (!(o instanceof Map))
+				{
+					continue;
+				}
+				Map<String, Object> a = (Map<String, Object>) o;
+				if (GpMachinePanel.toLong(a.get("left_min")) > 1)
+				{
+					continue;
+				}
+				String key = "limit|" + a.get("name") + "|" + a.get("free_at");
+				if (notified.add(key))
+				{
+					notifier.notify("GP MACHINE: the buy limit for " + a.get("name") + " is free again.");
+				}
+			}
+		}
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		// Grind Machine: your levels and finished quests, read once after login and then every 15 minutes
+		if (levelsTimer != null)
+		{
+			levelsTimer.cancel(false);
+		}
+		levelsTimer = executor.scheduleAtFixedRate(() -> clientThread.invoke(this::sendLevels), 8, LEVELS_EVERY_S, TimeUnit.SECONDS);
+	}
+
+	/**
+	 * Grind Machine: sends your skill levels, combat level, quest points and finished quests to the server, so the list
+	 * shows what you can do right now. Read only; runs on the client thread.
+	 */
+	private void sendLevels()
+	{
+		if (config.key().trim().isEmpty() || client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
+		{
+			return;
+		}
+		Map<String, Object> skills = new HashMap<>();
+		for (Skill s : Skill.values())
+		{
+			int level = client.getRealSkillLevel(s);
+			if (level > 0)
+			{
+				skills.put(s.getName(), level);
+			}
+		}
+		skills.put("Combat", client.getLocalPlayer().getCombatLevel());
+		skills.put("Quest points", client.getVarpValue(VarPlayer.QUEST_POINTS));
+		List<String> quests = new ArrayList<>();
+		for (Quest q : Quest.values())
+		{
+			try
+			{
+				if (q.getState(client) == QuestState.FINISHED)
+				{
+					quests.add(q.getName());
+				}
+			}
+			catch (RuntimeException e)
+			{
+				// a quest the client cannot read right now: skip it
+			}
+		}
+		Map<String, Object> body = new HashMap<>();
+		body.put("skills", skills);
+		body.put("quests", quests);
+		postJson("levels", body, null);
+	}
+
+	/**
+	 * POST JSON to .../api/v1/<name> with the key; the callback gets the parsed answer (or null on failure).
+	 */
+	private void postJson(String name, Map<String, Object> body, java.util.function.Consumer<Map<String, Object>> then)
+	{
+		Request request;
+		try
+		{
+			request = new Request.Builder()
+				.url(apiUrl(config.serverUrl(), name))
+				.header("Authorization", "Bearer " + config.key().trim())
+				.post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"), gson.toJson(body)))
+				.build();
+		}
+		catch (IllegalArgumentException e)
+		{
+			return;
+		}
+		okHttpClient.newCall(request).enqueue(new Callback()
+		{
+			@Override
+			public void onFailure(Call call, IOException e)
+			{
+				log.debug("GP MACHINE: {} failed", name, e);
+				if (then != null)
+				{
+					then.accept(null);
+				}
+			}
+
+			@Override
+			public void onResponse(Call call, Response response)
+			{
+				Map<String, Object> uit = null;
+				try (Response r = response)
+				{
+					if (r.isSuccessful() && r.body() != null)
+					{
+						uit = gson.fromJson(r.body().string(), new TypeToken<Map<String, Object>>()
+						{
+						}.getType());
+					}
+				}
+				catch (Exception e)
+				{
+					log.debug("GP MACHINE: {} unreadable answer", name, e);
+				}
+				if (then != null)
+				{
+					then.accept(uit);
+				}
+			}
+		});
+	}
+
+	/**
+	 * Grind Machine, Start: the server gives the items to bring and what the method yields (with prices), and the place.
+	 * The plugin then shows a checklist, puts an arrow and a map marker on the place, and counts what appears in your
+	 * inventory. Nothing is done in the game.
+	 */
+	@SuppressWarnings("unchecked")
+	private void startGrind(Map<String, Object> method)
+	{
+		if (method == null || grind != null)
+		{
+			return;
+		}
+		Map<String, Object> body = new HashMap<>();
+		body.put("method_id", GpMachinePanel.toLong(method.get("id")));
+		GpMachinePanel p = panel;
+		if (p != null)
+		{
+			p.setStatus("Starting…", false);
+		}
+		postJson("grind/start", body, answer ->
+		{
+			if (answer == null || !Boolean.TRUE.equals(answer.get("ok")))
+			{
+				if (p != null)
+				{
+					SwingUtilities.invokeLater(() -> p.setStatus("Could not start: no answer from the server.", true));
+				}
+				return;
+			}
+			synchronized (grindGainedItems)
+			{
+				grindGainedItems.clear();
+				grindUsedItems.clear();
+				outputPrices.clear();
+				inputPrices.clear();
+				fillPrices(answer.get("outputs"), outputPrices);
+				fillPrices(answer.get("inputs"), inputPrices);
+			}
+			List<Map<String, Object>> steps = answer.get("steps") instanceof List ? (List<Map<String, Object>>) answer.get("steps") : new ArrayList<>();
+			GrindState s = new GrindState(answer, steps, System.currentTimeMillis());
+			grind = s;
+			clientThread.invoke(() ->
+			{
+				lastInventory = inventoryCounts();
+				long x = GpMachinePanel.toLong(answer.get("x"));
+				long y = GpMachinePanel.toLong(answer.get("y"));
+				if (x > 0 && y > 0)
+				{
+					WorldPoint wp = new WorldPoint((int) x, (int) y, 0);
+					mapPoint = WorldMapPoint.builder().worldPoint(wp).image(icon()).tooltip("GP MACHINE: " + answer.get("name")).build();
+					worldMapPointManager.add(mapPoint);
+				}
+				applyStep(s);
+			});
+			if (grindTicker != null)
+			{
+				grindTicker.cancel(false);
+			}
+			grindTicker = executor.scheduleAtFixedRate(() -> clientThread.invoke(this::tickGrind), 1, 5, TimeUnit.SECONDS);
+		});
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void fillPrices(Object list, Map<Integer, Long> into)
+	{
+		if (!(list instanceof List))
+		{
+			return;
+		}
+		for (Object o : (List<?>) list)
+		{
+			if (o instanceof Map)
+			{
+				Map<String, Object> it = (Map<String, Object>) o;
+				long id = GpMachinePanel.toLong(it.get("item_id"));
+				if (id > 0)
+				{
+					into.put((int) id, it.get("price") == null ? (id == COINS ? 1L : 0L) : GpMachinePanel.toLong(it.get("price")));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Grind Machine, Stop: the session (start, stop, gp, what was gained and used) goes to the server; from 2 members
+	 * the dashboard shows the real gp per hour next to the wiki figure. Arrow and map marker are removed.
+	 */
+	private void stopGrind()
+	{
+		GrindState s = grind;
+		if (s == null)
+		{
+			return;
+		}
+		Map<String, Object> m = s.method;
+		grind = null;
+		synchronized (stepObjects)
+		{
+			stepObjects.clear();
+		}
+		if (grindTicker != null)
+		{
+			grindTicker.cancel(false);
+			grindTicker = null;
+		}
+		clientThread.invoke(() ->
+		{
+			client.clearHintArrow();
+			if (mapPoint != null)
+			{
+				worldMapPointManager.remove(mapPoint);
+				mapPoint = null;
+			}
+		});
+		Map<String, Object> body = new HashMap<>();
+		body.put("method_id", GpMachinePanel.toLong(m.get("id")));
+		body.put("start", s.startMs / 1000);
+		body.put("stop", System.currentTimeMillis() / 1000);
+		synchronized (grindGainedItems)
+		{
+			body.put("gp", s.gp());
+			body.put("gained", new HashMap<>(grindGainedItems));
+			body.put("used", new HashMap<>(grindUsedItems));
+		}
+		if (account != null)
+		{
+			body.put("account", account);
+		}
+		GpMachinePanel p = panel;
+		if (p != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				p.setGrindSession(null);
+				p.setStatus("Session saved · refreshing…", false);
+			});
+		}
+		postJson("grind/session", body, answer -> refreshPanel());
+	}
+
+	/**
+	 * Every 5 seconds while a session runs: the checklist (what you carry or wear) and the counter for the panel.
+	 */
+	@SuppressWarnings("unchecked")
+	private void tickGrind()
+	{
+		GrindState s = grind;
+		GpMachinePanel p = panel;
+		if (s == null || p == null)
+		{
+			return;
+		}
+		Map<String, Object> m = s.method;
+		Map<Integer, Integer> have = inventoryCounts();
+		ItemContainer eq = client.getItemContainer(InventoryID.EQUIPMENT);
+		if (eq != null)
+		{
+			for (Item it : eq.getItems())
+			{
+				if (it.getId() > 0)
+				{
+					have.merge(it.getId(), it.getQuantity(), Integer::sum);
+				}
+			}
+		}
+		List<Map<String, Object>> checklist = new ArrayList<>();
+		if (m.get("inputs") instanceof List)
+		{
+			for (Object o : (List<?>) m.get("inputs"))
+			{
+				if (!(o instanceof Map))
+				{
+					continue;
+				}
+				Map<String, Object> it = (Map<String, Object>) o;
+				int id = (int) GpMachinePanel.toLong(it.get("item_id"));
+				Map<String, Object> c = new HashMap<>();
+				c.put("name", it.get("name"));
+				int count = id > 0 ? have.getOrDefault(id, 0) : 0;
+				c.put("count", count);
+				c.put("have", id > 0 ? count > 0 : Boolean.TRUE); // an item we cannot identify is not marked missing
+				checklist.add(c);
+			}
+		}
+		s.checklist = checklist;
+		// the arrow: distance to the target of the current step, and steps with a place tick off by themselves
+		Player me = client.getLocalPlayer();
+		WorldPoint target = s.target;
+		if (me != null && target != null)
+		{
+			WorldPoint here = me.getWorldLocation();
+			s.distance = here.getPlane() == target.getPlane() ? here.distanceTo(target) : -1;
+			Map<String, Object> step = s.step();
+			if (step != null && "walk".equals(step.get("kind")) && Boolean.TRUE.equals(step.get("auto"))
+				&& s.distance >= 0 && s.distance <= GpMachinePanel.toLong(step.get("radius")) && s.stepIndex < s.steps.size() - 1)
+			{
+				moveStep(1);
+			}
+		}
+		else
+		{
+			s.distance = -1;
+		}
+		SwingUtilities.invokeLater(() -> p.setGrindSession(s));
+	}
+
+	/**
+	 * Previous or next step (the buttons in the panel), or the next step when the plugin ticks one off itself.
+	 * Runs on the client thread.
+	 */
+	private void moveStep(int delta)
+	{
+		GrindState s = grind;
+		if (s == null || s.steps.isEmpty())
+		{
+			return;
+		}
+		int i = Math.max(0, Math.min(s.steps.size() - 1, s.stepIndex + delta));
+		if (i == s.stepIndex)
+		{
+			return;
+		}
+		s.stepIndex = i;
+		applyStep(s);
+		GpMachinePanel p = panel;
+		if (p != null)
+		{
+			SwingUtilities.invokeLater(() -> p.setGrindSession(s));
+		}
+	}
+
+	/**
+	 * The current step in the game: the arrow and the gold tile on the step's place (or the method's place), and the
+	 * objects of the step (a bank booth, for example) outlined in green. Runs on the client thread.
+	 */
+	private void applyStep(GrindState s)
+	{
+		Map<String, Object> step = s.step();
+		long x = step != null && step.get("x") != null ? GpMachinePanel.toLong(step.get("x")) : GpMachinePanel.toLong(s.method.get("x"));
+		long y = step != null && step.get("y") != null ? GpMachinePanel.toLong(step.get("y")) : GpMachinePanel.toLong(s.method.get("y"));
+		int plane = step != null && step.get("plane") != null ? (int) GpMachinePanel.toLong(step.get("plane")) : 0;
+		if (x > 0 && y > 0)
+		{
+			s.target = new WorldPoint((int) x, (int) y, plane);
+			client.setHintArrow(s.target);
+		}
+		else
+		{
+			s.target = null;
+			client.clearHintArrow();
+		}
+		synchronized (stepObjects)
+		{
+			stepObjects.clear();
+			List<String> names = s.stepObjects();
+			if (!names.isEmpty())
+			{
+				Scene scene = client.getScene();
+				Tile[][][] tiles = scene == null ? null : scene.getTiles();
+				if (tiles != null)
+				{
+					for (Tile[] row : tiles[client.getPlane()])
+					{
+						for (Tile tile : row)
+						{
+							if (tile == null)
+							{
+								continue;
+							}
+							for (GameObject o : tile.getGameObjects())
+							{
+								if (o != null && matchesStep(o, names))
+								{
+									stepObjects.add(o);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	private boolean matchesStep(GameObject o, List<String> names)
+	{
+		ObjectComposition def = client.getObjectDefinition(o.getId());
+		if (def == null)
+		{
+			return false;
+		}
+		if (def.getImpostorIds() != null)
+		{
+			try
+			{
+				def = def.getImpostor();
+			}
+			catch (RuntimeException e)
+			{
+				return false;
+			}
+		}
+		String name = def == null || def.getName() == null ? "" : def.getName().toLowerCase();
+		return !name.isEmpty() && !"null".equals(name) && names.contains(name);
+	}
+
+	@Subscribe
+	public void onGameObjectSpawned(GameObjectSpawned event)
+	{
+		GrindState s = grind;
+		if (s == null)
+		{
+			return;
+		}
+		List<String> names = s.stepObjects();
+		if (!names.isEmpty() && matchesStep(event.getGameObject(), names))
+		{
+			synchronized (stepObjects)
+			{
+				stepObjects.add(event.getGameObject());
+			}
+		}
+	}
+
+	@Subscribe
+	public void onGameObjectDespawned(GameObjectDespawned event)
+	{
+		synchronized (stepObjects)
+		{
+			stepObjects.remove(event.getGameObject());
+		}
+	}
+
+	/**
+	 * The Report button in the Grind tab: the text goes to the owner's Support page, with the method's name.
+	 */
+	private void reportProblem(String method, String text)
+	{
+		Map<String, Object> body = new HashMap<>();
+		body.put("method", method);
+		body.put("text", text);
+		GpMachinePanel p = panel;
+		postJson("grind/report", body, answer ->
+		{
+			if (p != null)
+			{
+				boolean ok = answer != null && Boolean.TRUE.equals(answer.get("ok"));
+				SwingUtilities.invokeLater(() -> p.setStatus(ok ? "Thanks, the owner got your report." : "Report failed, try the flag on the dashboard.", !ok));
+			}
+		});
+	}
+
+	private Map<Integer, Integer> inventoryCounts()
+	{
+		Map<Integer, Integer> counts = new HashMap<>();
+		ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+		if (inv != null)
+		{
+			for (Item it : inv.getItems())
+			{
+				if (it.getId() > 0)
+				{
+					counts.merge(it.getId(), it.getQuantity(), Integer::sum);
+				}
+			}
+		}
+		return counts;
+	}
+
+	/**
+	 * The counter: what the method yields and appears in your inventory counts as gained (at GP MACHINE prices), what
+	 * the method uses and disappears counts as used. Banking a drop or withdrawing supplies is ignored by looking only
+	 * at increases of outputs and decreases of inputs.
+	 */
+	@Subscribe
+	public void onItemContainerChanged(ItemContainerChanged event)
+	{
+		GrindState s = grind;
+		if (s == null || event.getContainerId() != InventoryID.INVENTORY.getId())
+		{
+			return;
+		}
+		Map<Integer, Integer> now = inventoryCounts();
+		Map<Integer, Integer> before = lastInventory == null ? new HashMap<>() : lastInventory;
+		synchronized (grindGainedItems)
+		{
+			for (Map.Entry<Integer, Long> e : outputPrices.entrySet())
+			{
+				int delta = now.getOrDefault(e.getKey(), 0) - before.getOrDefault(e.getKey(), 0);
+				if (delta > 0)
+				{
+					s.gained += delta * e.getValue();
+					grindGainedItems.merge(e.getKey(), delta, Integer::sum);
+				}
+			}
+			for (Map.Entry<Integer, Long> e : inputPrices.entrySet())
+			{
+				int delta = before.getOrDefault(e.getKey(), 0) - now.getOrDefault(e.getKey(), 0);
+				if (delta > 0)
+				{
+					s.used += delta * e.getValue();
+					grindUsedItems.merge(e.getKey(), delta, Integer::sum);
+				}
+			}
+		}
+		lastInventory = now;
 	}
 
 	/**
